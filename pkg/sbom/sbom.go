@@ -75,90 +75,62 @@ type sigstoreBundle struct {
 	DSSEEnvelope json.RawMessage `json:"dsseEnvelope"`
 }
 
-func IsCycloneDXJSON(r io.ReadSeeker) (bool, error) {
+// matchesHeader rewinds the reader and reports whether its content matches
+// the given format check.
+func matchesHeader(r io.ReadSeeker, match func(io.Reader) bool) (bool, error) {
 	if _, err := r.Seek(0, io.SeekStart); err != nil {
 		return false, xerrors.Errorf("seek error: %w", err)
 	}
-
-	var cdxBom cdxHeader
-	if err := json.NewDecoder(r).Decode(&cdxBom); err == nil {
-		if cdxBom.BOMFormat == "CycloneDX" {
-			return true, nil
-		}
-	}
-	return false, nil
+	return match(r), nil
 }
-func IsCycloneDXXML(r io.ReadSeeker) (bool, error) {
-	if _, err := r.Seek(0, io.SeekStart); err != nil {
-		return false, xerrors.Errorf("seek error: %w", err)
-	}
 
-	var cdxBom cdxHeader
-	if err := xml.NewDecoder(r).Decode(&cdxBom); err == nil {
-		if strings.HasPrefix(cdxBom.XMLNS, "http://cyclonedx.org") {
-			return true, nil
-		}
-	}
-	return false, nil
+func IsCycloneDXJSON(r io.ReadSeeker) (bool, error) {
+	return matchesHeader(r, func(r io.Reader) bool {
+		var cdxBom cdxHeader
+		return json.NewDecoder(r).Decode(&cdxBom) == nil && cdxBom.BOMFormat == "CycloneDX"
+	})
+}
+
+func IsCycloneDXXML(r io.ReadSeeker) (bool, error) {
+	return matchesHeader(r, func(r io.Reader) bool {
+		var cdxBom cdxHeader
+		return xml.NewDecoder(r).Decode(&cdxBom) == nil && strings.HasPrefix(cdxBom.XMLNS, "http://cyclonedx.org")
+	})
 }
 
 func IsSPDXJSON(r io.ReadSeeker) (bool, error) {
-	if _, err := r.Seek(0, io.SeekStart); err != nil {
-		return false, xerrors.Errorf("seek error: %w", err)
-	}
-
-	var spdxBom spdxHeader
-	if err := json.NewDecoder(r).Decode(&spdxBom); err == nil {
-		if spdxBom.SpdxID == "SPDXRef-DOCUMENT" {
-			return true, nil
-		}
-	}
-	return false, nil
+	return matchesHeader(r, func(r io.Reader) bool {
+		var spdxBom spdxHeader
+		return json.NewDecoder(r).Decode(&spdxBom) == nil && spdxBom.SpdxID == "SPDXRef-DOCUMENT"
+	})
 }
 
 func IsSPDXTV(r io.ReadSeeker) (bool, error) {
-	if _, err := r.Seek(0, io.SeekStart); err != nil {
-		return false, xerrors.Errorf("seek error: %w", err)
-	}
-
-	if scanner := bufio.NewScanner(r); scanner.Scan() {
-		if strings.HasPrefix(scanner.Text(), "SPDX") {
-			return true, nil
-		}
-	}
-	return false, nil
+	return matchesHeader(r, func(r io.Reader) bool {
+		scanner := bufio.NewScanner(r)
+		return scanner.Scan() && strings.HasPrefix(scanner.Text(), "SPDX")
+	})
 }
 
 func DetectFormat(r io.ReadSeeker) (Format, error) {
 	// Rewind the SBOM file at the end
 	defer r.Seek(0, io.SeekStart)
 
-	// Try CycloneDX JSON
-	if ok, err := IsCycloneDXJSON(r); err != nil {
-		return FormatUnknown, err
-	} else if ok {
-		return FormatCycloneDXJSON, nil
+	formatChecks := []struct {
+		isFormat func(io.ReadSeeker) (bool, error)
+		format   Format
+	}{
+		{IsCycloneDXJSON, FormatCycloneDXJSON},
+		{IsCycloneDXXML, FormatCycloneDXXML},
+		{IsSPDXJSON, FormatSPDXJSON},
+		{IsSPDXTV, FormatSPDXTV},
 	}
-
-	// Try CycloneDX XML
-	if ok, err := IsCycloneDXXML(r); err != nil {
-		return FormatUnknown, err
-	} else if ok {
-		return FormatCycloneDXXML, nil
-	}
-
-	// Try SPDX json
-	if ok, err := IsSPDXJSON(r); err != nil {
-		return FormatUnknown, err
-	} else if ok {
-		return FormatSPDXJSON, nil
-	}
-
-	// Try SPDX tag-value
-	if ok, err := IsSPDXTV(r); err != nil {
-		return FormatUnknown, err
-	} else if ok {
-		return FormatSPDXTV, nil
+	for _, c := range formatChecks {
+		if ok, err := c.isFormat(r); err != nil {
+			return FormatUnknown, err
+		} else if ok {
+			return c.format, nil
+		}
 	}
 
 	if _, err := r.Seek(0, io.SeekStart); err != nil {
