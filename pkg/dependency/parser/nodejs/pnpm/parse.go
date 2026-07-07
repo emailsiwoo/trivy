@@ -168,11 +168,11 @@ func (p *Parser) parseV9(lockFile LockFile) ([]ftypes.Package, []ftypes.Dependen
 		relationship := ftypes.RelationshipIndirect // Assume transitive by default
 
 		// Check if this package matches a direct dev dependency
-		if v, ok := devDeps[name]; ok && p.trimPeerDeps(v, lockVer) == version {
+		if p.isDirectDep(devDeps, name, version, lockVer) {
 			relationship = ftypes.RelationshipDirect
 		}
 		// Check if this package matches a direct production dependency
-		if v, ok := deps[name]; ok && p.trimPeerDeps(v, lockVer) == version {
+		if p.isDirectDep(deps, name, version, lockVer) {
 			relationship = ftypes.RelationshipDirect
 			dev = false // This is a production dependency, not a dev dependency
 		}
@@ -222,6 +222,13 @@ func (p *Parser) parseV9(lockFile LockFile) ([]ftypes.Package, []ftypes.Dependen
 	}
 
 	return lo.Values(resolvedPkgs), lo.Values(resolvedDeps)
+}
+
+// isDirectDep reports whether the package name/version matches an entry in directDeps,
+// a map of direct dependency names to their resolved versions (which may include peer dependency suffixes).
+func (p *Parser) isDirectDep(directDeps map[string]string, name, version string, lockVer float64) bool {
+	v, ok := directDeps[name]
+	return ok && p.trimPeerDeps(v, lockVer) == version
 }
 
 // markRootPkgs recursively marks a package and all its dependencies as production dependencies.
