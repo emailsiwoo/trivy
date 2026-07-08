@@ -67,89 +67,67 @@ type ReportHook interface {
 	PostReport(ctx context.Context, report *types.Report, opts flag.Options) error
 }
 
-func PreRun(ctx context.Context, opts flag.Options) error {
+// runHooks calls fn for each registered hook implementing T, skipping the others.
+// It stops at the first error, wrapping it with the hook name and the stage (e.g. "pre run").
+func runHooks[T Hook](stage string, fn func(h T) error) error {
 	for _, e := range Hooks() {
-		h, ok := e.(RunHook)
+		h, ok := e.(T)
 		if !ok {
 			continue
 		}
-		if err := h.PreRun(ctx, opts); err != nil {
-			return xerrors.Errorf("%s pre run error: %w", e.Name(), err)
+		if err := fn(h); err != nil {
+			return xerrors.Errorf("%s %s error: %w", e.Name(), stage, err)
 		}
 	}
 	return nil
+}
+
+// PreRun is a hook that is called before all the processes.
+func PreRun(ctx context.Context, opts flag.Options) error {
+	return runHooks("pre run", func(h RunHook) error {
+		return h.PreRun(ctx, opts)
+	})
 }
 
 // PostRun is a hook that is called after all the processes.
 func PostRun(ctx context.Context, opts flag.Options) error {
-	for _, e := range Hooks() {
-		h, ok := e.(RunHook)
-		if !ok {
-			continue
-		}
-		if err := h.PostRun(ctx, opts); err != nil {
-			return xerrors.Errorf("%s post run error: %w", e.Name(), err)
-		}
-	}
-	return nil
+	return runHooks("post run", func(h RunHook) error {
+		return h.PostRun(ctx, opts)
+	})
 }
 
 // PreScan is a hook that is called before the scan.
 func PreScan(ctx context.Context, target *types.ScanTarget, options types.ScanOptions) error {
-	for _, e := range Hooks() {
-		h, ok := e.(ScanHook)
-		if !ok {
-			continue
-		}
-		if err := h.PreScan(ctx, target, options); err != nil {
-			return xerrors.Errorf("%s pre scan error: %w", e.Name(), err)
-		}
-	}
-	return nil
+	return runHooks("pre scan", func(h ScanHook) error {
+		return h.PreScan(ctx, target, options)
+	})
 }
 
 // PostScan is a hook that is called after the scan.
 func PostScan(ctx context.Context, results types.Results) (types.Results, error) {
-	var err error
-	for _, e := range Hooks() {
-		h, ok := e.(ScanHook)
-		if !ok {
-			continue
-		}
-		results, err = h.PostScan(ctx, results)
-		if err != nil {
-			return nil, xerrors.Errorf("%s post scan error: %w", e.Name(), err)
-		}
+	err := runHooks("post scan", func(h ScanHook) error {
+		var scanErr error
+		results, scanErr = h.PostScan(ctx, results)
+		return scanErr
+	})
+	if err != nil {
+		return nil, err
 	}
 	return results, nil
 }
 
 // PreReport is a hook that is called before the report is written.
 func PreReport(ctx context.Context, report *types.Report, opts flag.Options) error {
-	for _, e := range Hooks() {
-		h, ok := e.(ReportHook)
-		if !ok {
-			continue
-		}
-		if err := h.PreReport(ctx, report, opts); err != nil {
-			return xerrors.Errorf("%s pre report error: %w", e.Name(), err)
-		}
-	}
-	return nil
+	return runHooks("pre report", func(h ReportHook) error {
+		return h.PreReport(ctx, report, opts)
+	})
 }
 
 // PostReport is a hook that is called after the report is written.
 func PostReport(ctx context.Context, report *types.Report, opts flag.Options) error {
-	for _, e := range Hooks() {
-		h, ok := e.(ReportHook)
-		if !ok {
-			continue
-		}
-		if err := h.PostReport(ctx, report, opts); err != nil {
-			return xerrors.Errorf("%s post report error: %w", e.Name(), err)
-		}
-	}
-	return nil
+	return runHooks("post report", func(h ReportHook) error {
+		return h.PostReport(ctx, report, opts)
+	})
 }
 
 // Hooks returns the list of hooks.
