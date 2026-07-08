@@ -68,59 +68,71 @@ func (sealSecurity) Name() string {
 	return "seal"
 }
 
+// matchRule describes how Seal Security packages are detected in one ecosystem:
+// a renamed-package name check and a no-prefix version-suffix pattern.
+// suffixResult is Matched when the suffix cannot collide with real versions
+// in the ecosystem, and Candidate when it can (the caller then confirms the
+// match against the Seal advisory bucket, see library.Driver.advisories).
+type matchRule struct {
+	renamedName   func(pkgName string) bool
+	versionSuffix *regexp.Regexp
+	suffixResult  library.MatchResult
+}
+
+var matchRules = map[ecosystem.Type]matchRule{
+	ecosystem.Maven: {
+		// Renamed: e.g. seal.sp1.org.eclipse.jetty:jetty-http
+		renamedName: func(pkgName string) bool {
+			rest, ok := strings.CutPrefix(pkgName, "seal.sp")
+			return ok && rest != "" && unicode.IsDigit(rune(rest[0]))
+		},
+		versionSuffix: plusSealSuffix,
+		suffixResult:  library.Matched,
+	},
+	ecosystem.Pip: {
+		// Renamed: e.g. seal-django
+		renamedName:   hasPrefixFunc("seal-"),
+		versionSuffix: plusSealSuffix,
+		suffixResult:  library.Matched,
+	},
+	ecosystem.Npm: {
+		// Renamed: e.g. @seal-security/ejs
+		renamedName:   hasPrefixFunc("@seal-security/"),
+		versionSuffix: npmSealSuffix,
+		suffixResult:  library.Candidate,
+	},
+	ecosystem.Go: {
+		// Renamed: e.g. sealsecurity.io/github.com/Masterminds/goutils
+		renamedName:   hasPrefixFunc("sealsecurity.io/"),
+		versionSuffix: goSealSuffix,
+		suffixResult:  library.Candidate,
+	},
+	ecosystem.RubyGems: {
+		// Renamed: e.g. seal-rack
+		renamedName:   hasPrefixFunc("seal-"),
+		versionSuffix: rubySealSuffix,
+		suffixResult:  library.Candidate,
+	},
+}
+
+func hasPrefixFunc(prefix string) func(string) bool {
+	return func(pkgName string) bool {
+		return strings.HasPrefix(pkgName, prefix)
+	}
+}
+
 // Match determines whether a package is provided by Seal Security.
 // It expects a normalized package name (see vulnerability.NormalizePkgName).
 func (sealSecurity) Match(eco ecosystem.Type, pkgName, pkgVer string) library.MatchResult {
-	switch eco {
-	case ecosystem.Maven:
-		// Renamed: e.g. seal.sp1.org.eclipse.jetty:jetty-http
-		if rest, ok := strings.CutPrefix(pkgName, "seal.sp"); ok && rest != "" && unicode.IsDigit(rune(rest[0])) {
-			return library.Matched
-		}
-		// No-prefix: the "+spN" version suffix cannot collide with real Maven versions.
-		if plusSealSuffix.MatchString(pkgVer) {
-			return library.Matched
-		}
-	case ecosystem.Pip:
-		// Renamed: e.g. seal-django
-		if strings.HasPrefix(pkgName, "seal-") {
-			return library.Matched
-		}
-		// No-prefix: the "+spN" version suffix cannot collide with real PyPI versions.
-		if plusSealSuffix.MatchString(pkgVer) {
-			return library.Matched
-		}
-	case ecosystem.Npm:
-		// Renamed: e.g. @seal-security/ejs
-		if strings.HasPrefix(pkgName, "@seal-security/") {
-			return library.Matched
-		}
-		// No-prefix: the "-spN" version suffix can also appear on real npm
-		// packages, so confirm it against the Seal advisory bucket.
-		if npmSealSuffix.MatchString(pkgVer) {
-			return library.Candidate
-		}
-	case ecosystem.Go:
-		// Renamed: e.g. sealsecurity.io/github.com/Masterminds/goutils
-		if strings.HasPrefix(pkgName, "sealsecurity.io/") {
-			return library.Matched
-		}
-		// No-prefix: the "-spN" version suffix can also appear on real Go
-		// modules, so confirm it against the Seal advisory bucket.
-		if goSealSuffix.MatchString(pkgVer) {
-			return library.Candidate
-		}
-	case ecosystem.RubyGems:
-		// Renamed: e.g. seal-rack
-		if strings.HasPrefix(pkgName, "seal-") {
-			return library.Matched
-		}
-		// No-prefix: the ".0.1.spN" version suffix (e.g. 2.0.7.0.1.sp1) can
-		// also appear on real gems as prerelease segments, so confirm it
-		// against the Seal advisory bucket.
-		if rubySealSuffix.MatchString(pkgVer) {
-			return library.Candidate
-		}
+	rule, ok := matchRules[eco]
+	if !ok {
+		return library.NoMatch
+	}
+	if rule.renamedName(pkgName) {
+		return library.Matched
+	}
+	if rule.versionSuffix.MatchString(pkgVer) {
+		return rule.suffixResult
 	}
 	return library.NoMatch
 }
