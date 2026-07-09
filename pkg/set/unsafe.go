@@ -12,10 +12,8 @@ type unsafeSet[T comparable] map[T]struct{} //nolint: gocritic
 
 // New creates a new empty non-thread-safe set with optional initial values
 func New[T comparable](values ...T) Set[T] {
-	s := make(unsafeSet[T])
-	for _, v := range values {
-		s[v] = struct{}{}
-	}
+	s := make(unsafeSet[T], len(values))
+	s.Append(values...)
 	return s
 }
 
@@ -51,9 +49,7 @@ func (s unsafeSet[T]) Size() int {
 
 // Clear removes all items from the set
 func (s unsafeSet[T]) Clear() {
-	for k := range s {
-		delete(s, k)
-	}
+	clear(s)
 }
 
 // Clone returns a new set with a copy of all items
@@ -73,13 +69,9 @@ func (s unsafeSet[T]) Iter() iter.Seq[T] {
 
 // Union returns a new set containing all items from both sets
 func (s unsafeSet[T]) Union(other Set[T]) Set[T] {
-	result := make(unsafeSet[T])
-	for k := range s {
-		result[k] = struct{}{}
-	}
-	for _, item := range other.Items() {
-		result[item] = struct{}{}
-	}
+	result := make(unsafeSet[T], s.Size()+other.Size())
+	maps.Copy(result, s)
+	result.Append(other.Items()...)
 	return result
 }
 
@@ -88,7 +80,7 @@ func (s unsafeSet[T]) Intersection(other Set[T]) Set[T] {
 	result := make(unsafeSet[T])
 	for k := range s {
 		if other.Contains(k) {
-			result[k] = struct{}{}
+			result.Append(k)
 		}
 	}
 	return result
@@ -99,7 +91,7 @@ func (s unsafeSet[T]) Difference(other Set[T]) Set[T] {
 	result := make(unsafeSet[T])
 	for k := range s {
 		if !other.Contains(k) {
-			result[k] = struct{}{}
+			result.Append(k)
 		}
 	}
 	return result
