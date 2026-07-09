@@ -68,59 +68,75 @@ func (sealSecurity) Name() string {
 	return "seal"
 }
 
+// ecosystemRule describes how sealed packages are detected in one ecosystem:
+// a renamed-package name check and a no-prefix version-suffix pattern.
+type ecosystemRule struct {
+	// matchName reports whether the package name carries the ecosystem's
+	// renamed-package prefix. A name match is always authoritative (Matched).
+	matchName func(pkgName string) bool
+	// versionSuffix matches the ecosystem's sealed version suffix.
+	versionSuffix *regexp.Regexp
+	// suffixResult is returned on a version-suffix match: Matched where the
+	// suffix cannot collide with real versions (Maven/PyPI), Candidate where
+	// it can and must be confirmed against the Seal advisory bucket
+	// (Go/npm/Ruby).
+	suffixResult library.MatchResult
+}
+
+var ecosystemRules = map[ecosystem.Type]ecosystemRule{
+	ecosystem.Maven: {
+		// Renamed: e.g. seal.sp1.org.eclipse.jetty:jetty-http
+		matchName: func(pkgName string) bool {
+			rest, ok := strings.CutPrefix(pkgName, "seal.sp")
+			return ok && rest != "" && unicode.IsDigit(rune(rest[0]))
+		},
+		versionSuffix: plusSealSuffix,
+		suffixResult:  library.Matched,
+	},
+	ecosystem.Pip: {
+		// Renamed: e.g. seal-django
+		matchName:     hasNamePrefix("seal-"),
+		versionSuffix: plusSealSuffix,
+		suffixResult:  library.Matched,
+	},
+	ecosystem.Npm: {
+		// Renamed: e.g. @seal-security/ejs
+		matchName:     hasNamePrefix("@seal-security/"),
+		versionSuffix: npmSealSuffix,
+		suffixResult:  library.Candidate,
+	},
+	ecosystem.Go: {
+		// Renamed: e.g. sealsecurity.io/github.com/Masterminds/goutils
+		matchName:     hasNamePrefix("sealsecurity.io/"),
+		versionSuffix: goSealSuffix,
+		suffixResult:  library.Candidate,
+	},
+	ecosystem.RubyGems: {
+		// Renamed: e.g. seal-rack
+		matchName:     hasNamePrefix("seal-"),
+		versionSuffix: rubySealSuffix,
+		suffixResult:  library.Candidate,
+	},
+}
+
+func hasNamePrefix(prefix string) func(string) bool {
+	return func(pkgName string) bool {
+		return strings.HasPrefix(pkgName, prefix)
+	}
+}
+
 // Match determines whether a package is provided by Seal Security.
 // It expects a normalized package name (see vulnerability.NormalizePkgName).
 func (sealSecurity) Match(eco ecosystem.Type, pkgName, pkgVer string) library.MatchResult {
-	switch eco {
-	case ecosystem.Maven:
-		// Renamed: e.g. seal.sp1.org.eclipse.jetty:jetty-http
-		if rest, ok := strings.CutPrefix(pkgName, "seal.sp"); ok && rest != "" && unicode.IsDigit(rune(rest[0])) {
-			return library.Matched
-		}
-		// No-prefix: the "+spN" version suffix cannot collide with real Maven versions.
-		if plusSealSuffix.MatchString(pkgVer) {
-			return library.Matched
-		}
-	case ecosystem.Pip:
-		// Renamed: e.g. seal-django
-		if strings.HasPrefix(pkgName, "seal-") {
-			return library.Matched
-		}
-		// No-prefix: the "+spN" version suffix cannot collide with real PyPI versions.
-		if plusSealSuffix.MatchString(pkgVer) {
-			return library.Matched
-		}
-	case ecosystem.Npm:
-		// Renamed: e.g. @seal-security/ejs
-		if strings.HasPrefix(pkgName, "@seal-security/") {
-			return library.Matched
-		}
-		// No-prefix: the "-spN" version suffix can also appear on real npm
-		// packages, so confirm it against the Seal advisory bucket.
-		if npmSealSuffix.MatchString(pkgVer) {
-			return library.Candidate
-		}
-	case ecosystem.Go:
-		// Renamed: e.g. sealsecurity.io/github.com/Masterminds/goutils
-		if strings.HasPrefix(pkgName, "sealsecurity.io/") {
-			return library.Matched
-		}
-		// No-prefix: the "-spN" version suffix can also appear on real Go
-		// modules, so confirm it against the Seal advisory bucket.
-		if goSealSuffix.MatchString(pkgVer) {
-			return library.Candidate
-		}
-	case ecosystem.RubyGems:
-		// Renamed: e.g. seal-rack
-		if strings.HasPrefix(pkgName, "seal-") {
-			return library.Matched
-		}
-		// No-prefix: the ".0.1.spN" version suffix (e.g. 2.0.7.0.1.sp1) can
-		// also appear on real gems as prerelease segments, so confirm it
-		// against the Seal advisory bucket.
-		if rubySealSuffix.MatchString(pkgVer) {
-			return library.Candidate
-		}
+	rule, ok := ecosystemRules[eco]
+	if !ok {
+		return library.NoMatch
+	}
+	if rule.matchName(pkgName) {
+		return library.Matched
+	}
+	if rule.versionSuffix.MatchString(pkgVer) {
+		return rule.suffixResult
 	}
 	return library.NoMatch
 }
